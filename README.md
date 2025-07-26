@@ -19,22 +19,6 @@ An IoT device that promotes healthy TV viewing habits for children by automatica
 - **Expansion**: I2C level translator for 5V sensor modules
 - **Form Factor**: Compact design for TV bezel mounting
 
-## 📋 Repository Contents
-
-```
-├── hardware/
-│   ├── schematics/          # KiCad schematic files
-│   ├── pcb/                 # PCB layout files
-│   └── gerbers/             # Manufacturing files
-├── firmware/
-│   ├── esphome/             # ESPHome YAML configuration
-│   └── matter/              # Matter protocol implementation
-├── docs/
-│   ├── technical_doc.pdf    # Detailed technical documentation
-│   └── assembly_guide.md    # Hardware assembly instructions
-└── README.md
-```
-
 ## 🔧 Quick Start
 
 1. **Hardware**: Flash firmware via USB-C connection
@@ -48,18 +32,6 @@ An IoT device that promotes healthy TV viewing habits for children by automatica
 - **Warning Time**: 5-60s before action
 - **TV Codes**: Support for major manufacturers
 - **Zones**: Configurable 1-64 detection areas
-
-## 🏠 Compatibility
-
-- Home Assistant
-- Google Home
-- Apple HomeKit
-- Amazon Alexa
-- Samsung SmartThings
-
-## 📄 License
-
-MIT License - See [LICENSE](LICENSE) file for details
 
 ## 🤝 Contributing
 
