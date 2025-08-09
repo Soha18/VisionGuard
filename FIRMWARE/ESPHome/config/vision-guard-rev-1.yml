@@ -1,0 +1,640 @@
+esphome:
+  name: vision-guard-rev-1
+  friendly_name: 'VisionGuard Rev.1'
+  on_boot:
+    priority: 600
+    then:
+      - logger.log: "VisionGuard Child Safety System Starting..."
+      - delay: 3s
+      - logger.log: "System Ready"
+      - lambda: |-
+          if (id(close_threshold_m).state >= id(far_threshold_m).state) {
+            ESP_LOGW("config", "Adjusting thresholds: close >= far, nudging far up");
+            id(far_threshold_m).publish_state(id(close_threshold_m).state + 0.10f);
+          }
+
+substitutions:
+  device_name: 'VisionGuard Rev.1'
+
+esp32:
+  board: esp32-c6-devkitm-1
+  framework:
+    type: esp-idf
+    version: latest
+
+# Logging configuration
+logger:
+  level: INFO
+
+api:
+  reboot_timeout: 0s
+
+ota:
+  - platform: esphome
+
+wifi:
+  networks:
+  - ssid: !secret wifi_ssid
+    password: !secret wifi_password
+
+  ap:
+    ssid: '${device_name} AP'
+    password: '12345678'
+
+captive_portal:
+
+web_server:
+  port: 80
+  version: 3
+
+time:
+  - platform: sntp
+    id: sntp_time
+    timezone: Asia/Dubai
+    servers:
+     - '193.204.114.232'
+     - '129.6.15.30'
+     - '0.asia.pool.ntp.org'
+    # on_time:
+    # TODO: scheduling actions for the device
+
+i2c:
+  - id: bus_a
+    sda: GPIO6
+    scl: GPIO7
+    scan: true
+    frequency: 38kHz # 50kHz
+
+external_components:
+  - source:
+      type: local
+      path: my_components
+    components: [vl53l3cx]
+
+# Configure the VL53L3CX sensor hub
+vl53l3cx:
+  - id: tof_sensor
+    address: 0x29  # Default 7-bit I2C address
+    i2c_id: bus_a
+
+    # Basic configuration
+    # Distance measurement mode, affects max range vs. ambient immunity: SHORT Up to 1.36m, MEDIUM Up to 2.90m, LONG Up to 3.60m
+    distance_mode: MEDIUM               # default MEDIUM
+    # Measurement timing budget, 20ms to 1000ms, Higher = better accuracy, slower, Keep <= inter_measurement_period
+    timing_budget: 80ms                 # default 33ms
+    # Time between measurement starts in the sensor (must be >= timing_budget)
+    inter_measurement_period: 100ms     # default timing_budget + 5
+    # Sensor status publish interval. The sensor itself always runs continuously internally, must be >= inter_measurement_period
+    update_interval: 200ms              # default 100ms
+
+    ### Advanced signal processing configuration for multi-target separation, Accuracy/SNR tuning
+    # Minimum signal rate (MCPS) to accept a range; lower is more permissive
+    signal_rate_limit: 0.1              # default 0.1
+    # Sigma threshold (mm); higher tolerates noisier returns
+    sigma_threshold: 60.0               # default 50
+    # Smudge correction mode: DISABLE | CONTINUOUS | SINGLE | DEBUG
+    smudge_correction_mode: CONTINUOUS  # default CONTINUOUS
+    # Multi-target ordering: DISTANCE (closest first) | SIGNAL_STRENGTH (strongest first)
+    target_order: DISTANCE              # default DISTANCE
+
+    # Multi-target separation & histogram tuning
+    # merge_threshold: lower separates nearby targets more.
+    merge_threshold: 12000              # default 15000
+    # hist_noise_threshold: lower retains weaker secondary peaks.
+    hist_noise_threshold: 50            # default 50
+    # hist_merge: set false only for debugging edge cases
+    hist_merge: true                    # default True
+    # hist_merge_max_size:  (1..16)
+    hist_merge_max_size: 8              # default 8
+  
+    # GPIO pin configuration (optional)
+    xshut_pin:
+      number: GPIO3
+      mode:
+        output: true
+        pullup: true
+    interrupt_pin:
+      number: GPIO2
+      mode:
+        input: true
+        pullup: false
+
+# ---------- IR Transmitter Configuration ----------
+remote_transmitter:
+  id: ir_remote
+  pin: GPIO4
+  carrier_duty_percent: 50%
+  # rmt_symbols: 96  
+
+# ---------- Global Variables ----------
+globals:
+  - id: last_valid_distance
+    type: float
+    restore_value: no
+    initial_value: '2.0'
+  
+  - id: protection_active_state
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+
+# ---------- Sensors ----------
+sensor:
+  # Primary distance sensor with minimal filtering
+  - platform: vl53l3cx
+    vl53l3cx_id: tof_sensor
+    id: primary_target
+    name: "Target Distance"
+    target_number: 0
+    accuracy_decimals: 3
+    unit_of_measurement: "m"
+    device_class: distance
+    filters:
+      - exponential_moving_average:
+          alpha: 0.1
+          send_every: 4
+    # Drive transitions on each published value
+    on_value:
+      then:
+        - if:
+            condition:
+              lambda: |-
+                if (!id(guard_enabled).state) return false;
+                float d = id(primary_target).state;
+                return !isnan(d) && d < id(close_threshold_m).state;
+            then:
+              # In "near" zone: arm near timer once, cancel far timer
+              - script.stop: far_hold_timer
+              - if:
+                  condition:
+                    not:
+                      script.is_running: near_guard_timer
+                  then:
+                    - script.execute: near_guard_timer
+                    - script.wait: near_guard_timer
+            else:
+              - if:
+                  condition:
+                    lambda: |-
+                      if (!id(guard_enabled).state) return false;
+                      float d = id(primary_target).state;
+                      return isnan(d) || d > id(far_threshold_m).state;
+
+                  then:
+                    # In "far" zone: arm far timer once, cancel near timer
+                    - script.stop: near_guard_timer
+                    - if:
+                        condition:
+                          not:
+                            script.is_running: far_hold_timer
+                        then:
+                          - script.execute: far_hold_timer
+                          - script.wait: far_hold_timer
+                  else:
+                    # In the deadband: cancel any pending timers
+                    - script.stop: near_guard_timer
+                    - script.stop: far_hold_timer
+
+# ---------- Useful Built-in Sensors ----------
+  - platform: uptime
+    name: '${device_name} Uptime'
+    update_interval: 60s
+
+  - platform: internal_temperature
+    name: '${device_name} MCU Temperature'
+    update_interval: 60s
+
+  - platform: wifi_signal
+    name: '${device_name} WiFi Signal'
+    update_interval: 60s
+
+# ---------- Useful Built-in Text Sensors ----------
+text_sensor:
+  - platform: wifi_info
+    ip_address:
+      name: '${device_name} IP Address'
+  
+# ---------- User Configuration ----------
+number:
+  - platform: template
+    id: close_threshold_m
+    name: "Close Threshold (m)"
+    optimistic: true
+    min_value: 0.3
+    max_value: 2.0
+    step: 0.05
+    restore_value: true
+    initial_value: 0.8
+    icon: "mdi:arrow-collapse-horizontal"
+    
+  - platform: template
+    id: far_threshold_m
+    name: "Far Threshold (m)"
+    optimistic: true
+    min_value: 0.5
+    max_value: 3.0
+    step: 0.05
+    restore_value: true
+    initial_value: 1.0
+    icon: "mdi:arrow-expand-horizontal"
+    
+  - platform: template
+    id: close_grace_s
+    name: "Close Grace (s)"
+    optimistic: true
+    min_value: 1
+    max_value: 30
+    step: 1
+    restore_value: true
+    initial_value: 2
+    icon: "mdi:timer-sand"
+    
+  - platform: template
+    id: far_hold_s
+    name: "Far Hold (s)"
+    optimistic: true
+    min_value: 1
+    max_value: 30
+    step: 1
+    restore_value: true
+    initial_value: 2
+    icon: "mdi:timer-check"
+
+  - platform: template
+    id: ir_repeat_count
+    name: "IR Repeat Count"
+    optimistic: true
+    min_value: 1
+    max_value: 5
+    step: 1
+    restore_value: true
+    initial_value: 3
+    icon: "mdi:repeat"
+
+# ---------- LG TV Command Selectors ----------
+select:
+  - platform: template
+    id: near_action
+    name: "Near Action (Child Too Close)"
+    options: 
+      - "Mute"
+      - "Power Off"
+      - "Switch to HDMI1"
+      - "Switch to HDMI2"
+      - "Switch to HDMI3"
+      - "Switch to TV"
+      - "Home Dashboard"
+      - "Show Input List"
+      - "Exit/Back"
+      - "Do Nothing"
+    optimistic: true
+    restore_value: true
+    initial_option: "Mute"
+    icon: "mdi:television-guide"
+
+  - platform: template
+    id: far_action
+    name: "Far Action (Child Moved Away)"
+    options: 
+      - "Unmute"
+      - "Power On"
+      - "Switch to Previous"
+      - "Switch to HDMI1"
+      - "Switch to HDMI2"
+      - "Switch to HDMI3"
+      - "Switch to TV"
+      - "Home Dashboard"
+      - "Exit/Back"
+      - "Do Nothing"
+    optimistic: true
+    restore_value: true
+    initial_option: "Unmute"
+    icon: "mdi:television-play"
+
+# ---------- Switches ----------
+switch:
+  - platform: template
+    id: guard_enabled
+    name: "Protection Enabled"
+    restore_mode: RESTORE_DEFAULT_OFF
+    optimistic: true
+    icon: "mdi:shield-check"
+    on_turn_on:
+      - logger.log: "Protection Enabled"
+    on_turn_off:
+      - logger.log: "Protection Disabled"
+      - lambda: 'id(protection_active_state) = false;'
+
+# ---------- Control Buttons ----------
+button:
+  - platform: restart
+    name: '${device_name} Restart'
+
+  - platform: template
+    name: "Test Near Action"
+    icon: "mdi:alert"
+    on_press:
+      - script.execute: execute_near_action
+      - script.wait: execute_near_action
+
+  - platform: template
+    name: "Test Far Action"
+    icon: "mdi:check"
+    on_press:
+      - script.execute: execute_far_action
+      - script.wait: execute_far_action
+
+  - platform: template
+    name: "Force Mute"
+    icon: "mdi:volume-off"
+    on_press:
+      - script.execute:
+          id: send_lg_command_mapped
+          action: "Mute"
+      - script.wait: send_lg_command_mapped
+
+  - platform: template
+    name: "Force Input"
+    icon: "mdi:import"
+    on_press:
+      - script.execute:
+          id: send_lg_command_mapped
+          action: "Show Input List"
+
+# ---------- Scripts ----------
+script:
+  # Execute near action when child is too close
+  - id: execute_near_action
+    mode: single
+    then:
+      - logger.log:
+          format: "SAFETY: Executing near action - %s"
+          args: ['id(near_action).state.c_str()']
+      - if:
+          condition:
+            lambda: 'return id(near_action).state != "Do Nothing";'
+          then:
+            - script.execute:
+                id: send_lg_command_mapped
+                action: !lambda 'return id(near_action).state;'
+
+  # Execute far action when child moves away
+  - id: execute_far_action
+    mode: single
+    then:
+      - logger.log:
+          format: "SAFETY: Executing far action - %s"
+          args: ['id(far_action).state.c_str()']
+      - if:
+          condition:
+            lambda: 'return id(far_action).state != "Do Nothing";'
+          then:
+            - script.execute:
+                id: send_lg_command_mapped
+                action: !lambda 'return id(far_action).state;'
+            - script.wait: send_lg_command_mapped
+
+  # Fires once after "close_grace_s" *if still near*
+  - id: near_guard_timer
+    mode: single
+    then:
+      - delay: !lambda 'return (uint32_t)(id(close_grace_s).state * 1000);'
+      - if:
+          condition:
+            lambda: |-
+              if (!id(guard_enabled).state) return false;
+              float d = id(primary_target).state;
+              return !isnan(d) && d < id(close_threshold_m).state && !id(protection_active_state);
+          then:
+            - lambda: 'id(protection_active_state) = true;'
+            - script.execute: execute_near_action
+            - logger.log: "Executing Near Action..."
+            - script.wait: execute_near_action
+
+  # Fires once after "far_hold_s" *if still far*
+  - id: far_hold_timer
+    mode: single
+    then:
+      - delay: !lambda 'return (uint32_t)(id(far_hold_s).state * 1000);'
+      - if:
+          condition:
+            lambda: |-
+              if (!id(guard_enabled).state) return false;
+              float d = id(primary_target).state;
+              return (isnan(d) || d > id(far_threshold_m).state) && id(protection_active_state);
+          then:
+            - lambda: 'id(protection_active_state) = false;'
+            - script.execute: execute_far_action
+            - logger.log: "Executing Far Action..."
+            - script.wait: execute_far_action
+
+  # Map action names to LG commands
+  - id: send_lg_command_mapped
+    mode: queued
+    max_runs: 3
+    parameters:
+      action: string
+    then:   
+      # Power commands
+      - if:
+          condition:
+            lambda: 'return action == "Power Off" || action == "Power On";'
+          then:
+            - script.execute:
+                id: send_lg_ir
+                lg_command: "power"
+      
+      # Mute commands
+      - if:
+          condition:
+            lambda: 'return action == "Mute" || action == "Unmute";'
+          then:
+            - script.execute:
+                id: send_lg_ir
+                lg_command: "mute"
+      
+      # Input selection
+      - if:
+          condition:
+            lambda: 'return action == "Switch to HDMI1";'
+          then:
+            - script.execute:
+                id: send_lg_ir
+                lg_command: "hdmi1"
+      - if:
+          condition:
+            lambda: 'return action == "Switch to HDMI2";'
+          then:
+            - script.execute:
+                id: send_lg_ir
+                lg_command: "hdmi2"
+      - if:
+          condition:
+            lambda: 'return action == "Switch to HDMI3";'
+          then:
+            - script.execute:
+                id: send_lg_ir
+                lg_command: "hdmi3"
+      - if:
+          condition:
+            lambda: 'return action == "Switch to TV";'
+          then:
+            - script.execute:
+                id: send_lg_ir
+                lg_command: "tv"
+      
+      # Navigation
+      - if:
+          condition:
+            lambda: 'return action == "Show Input List";'
+          then:
+            - script.execute:
+                id: send_lg_ir
+                lg_command: "input"
+      - if:
+          condition:
+            lambda: 'return action == "Home Dashboard";'
+          then:
+            - script.execute:
+                id: send_lg_ir
+                lg_command: "home"
+      - if:
+          condition:
+            lambda: 'return action == "Exit/Back" || action == "Switch to Previous";'
+          then:
+            - script.execute:
+                id: send_lg_ir
+                lg_command: "back"
+
+
+  # Send LG IR command with proper repetition
+  - id: send_lg_ir
+    mode: queued
+    max_runs: 4
+    parameters:
+      lg_command: string
+    then:
+      - logger.log:
+          format: "IR: Sending LG command '%s' (repeat: %d)"
+          args: ['lg_command.c_str()', '(int) id(ir_repeat_count).state']
+
+      # Command mapping with verified LG codes
+      - if:
+          condition:
+            lambda: 'return lg_command == "power";'
+          then:
+            - remote_transmitter.transmit_lg:
+                data: 0x20DF10EF # 0x04FB08F7 # 0x20DF10EF
+                nbits: 32
+                repeat:
+                  times: !lambda 'return (uint32_t) id(ir_repeat_count).state;'
+                  wait_time: 50000us
+      
+      - if:
+          condition:
+            lambda: 'return lg_command == "mute";'
+          then:
+            - remote_transmitter.transmit_lg:
+                data: 0x20DF906F # 0x04FB09F6 # 0x20DF906F
+                nbits: 32
+                repeat:
+                  times: !lambda 'return (uint32_t) id(ir_repeat_count).state;'
+                  wait_time: 50000us
+     
+      - if:
+          condition:
+            lambda: 'return lg_command == "input";'
+          then:
+            - remote_transmitter.transmit_lg:
+                data: 0x20DFD02F # 0x04FB0BF4 # 0x20DFD02F
+                nbits: 32
+                repeat:
+                  times: !lambda 'return (uint32_t) id(ir_repeat_count).state;'
+                  wait_time: 50000us
+    
+      - if:
+          condition:
+            lambda: 'return lg_command == "hdmi1";'
+          then:
+            - remote_transmitter.transmit_lg:
+                data: 0x20DF738C # 0x04FB738C # 0x20DF738C
+                nbits: 32
+                repeat:
+                  times: !lambda 'return (uint32_t) id(ir_repeat_count).state;'
+                  wait_time: 50000us
+      
+      - if:
+          condition:
+            lambda: 'return lg_command == "hdmi2";'
+          then:
+            - remote_transmitter.transmit_lg:
+                data: 0x20DF33CC # 0x04FB33CC # 0x20DF33CC
+                nbits: 32
+                repeat:
+                  times: !lambda 'return (uint32_t) id(ir_repeat_count).state;'
+                  wait_time: 50000us
+      
+      - if:
+          condition:
+            lambda: 'return lg_command == "hdmi3";'
+          then:
+            - remote_transmitter.transmit_lg:
+                data: 0x20DF9768 # 0x04FB9768 # 0x20DF9768
+                nbits: 32
+                repeat:
+                  times: !lambda 'return (uint32_t) id(ir_repeat_count).state;'
+                  wait_time: 50000us
+     
+      - if:
+          condition:
+            lambda: 'return lg_command == "tv";'
+          then:
+            - remote_transmitter.transmit_lg:
+                data: 0x20DF0FF0 # 0x04FB0FF0 # 0x20DF0FF0
+                nbits: 32
+                repeat:
+                  times: !lambda 'return (uint32_t) id(ir_repeat_count).state;'
+                  wait_time: 50000us
+      
+      - if:
+          condition:
+            lambda: 'return lg_command == "home";'
+          then:
+            - remote_transmitter.transmit_lg:
+                data: 0x20DFDA25 # 0x04FB7C83 # 0x20DFDA25
+                nbits: 32
+                repeat:
+                  times: !lambda 'return (uint32_t) id(ir_repeat_count).state;'
+                  wait_time: 50000us
+      
+      - if:
+          condition:
+            lambda: 'return lg_command == "back";'
+          then:
+            - remote_transmitter.transmit_lg:
+                data: 0x20DF14EB # 0x04FB14EB # 0x20DF14EB 
+                nbits: 32
+                repeat:
+                  times: !lambda 'return (uint32_t) id(ir_repeat_count).state;'
+                  wait_time: 50000us
+      
+      - delay: 50ms
+
+# ---------- Status Monitoring ----------
+interval:
+  # Periodic health check
+  - interval: 60s
+    then:
+      - if:
+          condition:
+            switch.is_on: guard_enabled
+          then:
+            - lambda: |-
+                float dist = id(primary_target).state;
+                if (isnan(dist)) {
+                  ESP_LOGI("status", "Protection ON - No object detected");
+                } else {
+                  ESP_LOGI("status", "Protection ON - Distance: %.2fm", dist);
+                }
+                ESP_LOGD("status", "Protection state: %s", 
+                         id(protection_active_state) ? "ACTIVE" : "STANDBY");

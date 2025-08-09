@@ -1,0 +1,21 @@
+services:
+  esphome:
+    container_name: esphome
+    image: ghcr.io/esphome/esphome
+    volumes:
+      - ./config:/config
+      - /etc/localtime:/etc/localtime:ro
+    restart: unless-stopped
+    privileged: true
+    network_mode: host
+    environment:
+      - "USERNAME=admin"
+      - "PASSWORD=admin"
+    devices:
+      - "/dev/ttyACM0:/dev/ttyACM0"
+      - "/dev/ttyACM1:/dev/ttyACM1"
+      - "/dev/ttyACM2:/dev/ttyACM2"
+      - "/dev/ttyACM3:/dev/ttyACM3"
+      - "/dev/ttyACM4:/dev/ttyACM4"
+      - "/dev/ttyACM5:/dev/ttyACM5"
+      - "/dev/ttyACM6:/dev/ttyACM6"

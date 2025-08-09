@@ -1,0 +1,135 @@
+esphome:
+  name: vl53l3cx
+  friendly_name: 'vl53l3cx'
+
+esp32:
+  board: esp32-c6-devkitm-1
+  framework:
+    type: esp-idf
+    version: latest  # currently v5.5
+
+
+logger:
+  level: DEBUG
+
+i2c:
+  - id: bus_a
+    sda: GPIO6
+    scl: GPIO7
+    scan: true
+    frequency: 100kHz
+
+# Import the VL53L3CX external component (local dev copy)
+external_components:
+  - source:
+      type: local
+      path: components
+    components: [vl53l3cx]
+
+# VL53L3CX Component with multi-target enabled
+vl53l3cx:
+  - id: tof_sensor
+    # Optional: bind to a specific I2C bus
+    i2c_id: bus_a
+
+    # I2C 7-bit address (default 0x29)
+    address: 0x29
+
+    ## Basic configuration
+    # Distance measurement mode, affects max range vs. ambient immunity: SHORT Up to 1.36m, MEDIUM Up to 2.90m, LONG Up to 3.60m
+    distance_mode: MEDIUM               # default MEDIUM
+    # Measurement timing budget, 20ms to 1000ms, Higher = better accuracy, slower, Keep <= inter_measurement_period
+    timing_budget: 66ms                 # default 33ms
+    # Time between measurement starts in the sensor (must be >= timing_budget)
+    inter_measurement_period: 100ms     # default timing_budget + 5
+    # Sensor status publish interval. The sensor itself always runs continuously internally, must be >= inter_measurement_period
+    update_interval: 200ms              # default 100ms
+
+    ## Advanced signal processing configuration for multi-target separation, Accuracy/SNR tuning
+    # Minimum signal rate (MCPS) to accept a range; lower is more permissive
+    signal_rate_limit: 0.1              # default 0.1
+    # Sigma threshold (mm); higher tolerates noisier returns
+    sigma_threshold: 60.0               # default 50
+    # Smudge correction mode: DISABLE | CONTINUOUS | SINGLE | DEBUG
+    smudge_correction_mode: CONTINUOUS  # default CONTINUOUS
+    # Multi-target ordering: DISTANCE (closest first) | SIGNAL_STRENGTH (strongest first)
+    target_order: DISTANCE              # default DISTANCE
+
+    # Multi-target separation & histogram tuning
+    # merge_threshold: lower separates nearby targets more.
+    merge_threshold: 12000              # default 15000
+    # hist_noise_threshold: lower retains weaker secondary peaks.
+    hist_noise_threshold: 40            # default 50
+    # hist_merge: set false only for debugging edge cases
+    hist_merge: true                    # default True
+    # hist_merge_max_size:  (1..16)
+    hist_merge_max_size: 8              # default 8
+
+    # Region Of Interest (ROI): restrict FOV to a window (0..15 on each axis)
+    roi:
+      top_left_x: 6
+      top_left_y: 14
+      bottom_right_x: 9
+      bottom_right_y: 5
+
+    # Hardware control pins (optional but recommended)
+    xshut_pin:
+      number: GPIO3
+      mode:
+        output: true
+        pullup: true
+    interrupt_pin:
+      number: GPIO2
+      mode:
+        input: true
+        pullup: false
+    
+# Multiple sensor entities for each target
+sensor:
+  # Primary target (closest/strongest)
+  - platform: vl53l3cx
+    vl53l3cx_id: tof_sensor
+    name: "Primary Target Distance"
+    target_number: 0
+
+  # Secondary target  
+  - platform: vl53l3cx
+    vl53l3cx_id: tof_sensor
+    name: "Secondary Target Distance"
+    target_number: 1
+    
+  # Tertiary target
+  - platform: vl53l3cx
+    vl53l3cx_id: tof_sensor
+    name: "Tertiary Target Distance"  
+    target_number: 2
+    
+  # Quaternary target
+  - platform: vl53l3cx
+    vl53l3cx_id: tof_sensor
+    name: "Quaternary Target Distance"
+    target_number: 3
+
+# Binary sensor for GP1/interrupt pin (data ready status)
+binary_sensor:
+  - platform: vl53l3cx
+    vl53l3cx_id: tof_sensor
+    name: "ToF Data Ready"
+
+# Calibration buttons (trigger from ESPHome UI / Home Assistant)
+# Follow ST guide steps in order: RefSPAD (no target) -> Crosstalk (600mm, dark) -> Offset (known distance)
+button:
+  - platform: vl53l3cx
+    vl53l3cx_id: tof_sensor
+    # Ensure clear path (no target) before pressing
+    refspad_calibration:
+      name: "ToF RefSPAD Calibration"
+    # Place 17% reflectance target at 600mm in dark environment
+    crosstalk_calibration:
+      name: "ToF Crosstalk Calibration (600mm)"
+    # Place target at known distance; component uses Per-VCSEL mode internally
+    offset_calibration:
+      name: "ToF Offset Calibration"
+    # Field-friendly zero-distance calibration (touch target to cover glass)
+    zero_distance_calibration:
+      name: "ToF Zero-Distance Calibration"
