@@ -44,7 +44,7 @@ For detailed firmware setup and development environment:
 
 ### End User Setup
 For complete installation and usage instructions:
-- **User Manual**: [docs/USER_MANUAL.md](docs/USER_MANUAL.md)
+- **User Manual**: [docs/USER_MANUAL.md](DOCS/USER_MANUAL.md)
 - **Web Interface**: Access device IP after WiFi configuration
 - **Troubleshooting**: Common issues and solutions included in user manual
 
@@ -62,7 +62,7 @@ For complete installation and usage instructions:
 - **API**: Custom sensor components and IR protocol libraries
 - **Power Management**: Intelligent dual-input switching (Rev 2)
 
-**For complete technical specifications**: See [Technical Documentation](docs/technical_doc_rev2.md)
+**For complete technical specifications**: See [Technical Documentation](DOCS/technical_doc_rev2.md)
 
 ## 🏗️ Hardware Revisions
 
@@ -88,7 +88,7 @@ For complete installation and usage instructions:
 
 ### Getting Started
 - **Development Environment**: [FIRMWARE/ESPHome/README.md](FIRMWARE/ESPHome/README.md)
-- **Technical Architecture**: [docs/TECHNICAL.md](docs/technical_doc_rev2.md)
+- **Technical Architecture**: [docs/TECHNICAL.md](DOCS/technical_doc_rev2.md)
 - **Hardware Design**: See [hardware/](hardware/) directory
 
 ## 📄 License
