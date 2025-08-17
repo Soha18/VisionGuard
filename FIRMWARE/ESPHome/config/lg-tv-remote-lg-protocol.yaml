@@ -6,7 +6,7 @@ substitutions:
   device_name: 'LG TV Remote'
 
 esp32:
-  board: esp32-c6-devkitm-1
+  board: esp32dev
   framework:
     type: esp-idf
     version: latest

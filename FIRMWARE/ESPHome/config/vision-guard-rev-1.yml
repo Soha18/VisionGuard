@@ -17,7 +17,7 @@ substitutions:
   device_name: 'VisionGuard Rev.1'
 
 esp32:
-  board: esp32-c6-devkitm-1
+  board: esp32dev
   framework:
     type: esp-idf
     version: latest
@@ -50,7 +50,7 @@ web_server:
 time:
   - platform: sntp
     id: sntp_time
-    timezone: Asia/Dubai
+    timezone: Europe/Berlin
     servers:
      - '193.204.114.232'
      - '129.6.15.30'
@@ -60,8 +60,8 @@ time:
 
 i2c:
   - id: bus_a
-    sda: GPIO6
-    scl: GPIO7
+    sda: GPIO21
+    scl: GPIO22
     scan: true
     frequency: 38kHz # 50kHz
 
@@ -109,12 +109,12 @@ vl53l3cx:
   
     # GPIO pin configuration (optional)
     xshut_pin:
-      number: GPIO3
+      number: GPIO33
       mode:
         output: true
         pullup: true
     interrupt_pin:
-      number: GPIO2
+      number: GPIO32
       mode:
         input: true
         pullup: false

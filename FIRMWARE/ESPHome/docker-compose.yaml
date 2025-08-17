@@ -19,3 +19,4 @@ services:
       - "/dev/ttyACM4:/dev/ttyACM4"
       - "/dev/ttyACM5:/dev/ttyACM5"
       - "/dev/ttyACM6:/dev/ttyACM6"
+      - "/dev/ttyUSB0:/dev/ttyUSB0"
