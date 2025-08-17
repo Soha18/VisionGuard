@@ -44,7 +44,7 @@ For detailed firmware setup and development environment:
 
 ### End User Setup
 For complete installation and usage instructions:
-- **User Manual**: [docs/USER_MANUAL.md](DOCS/USER_MANUAL.md)
+- **User Manual**: [docs/USER_MANUAL.md](DOCS/visionguard_user_manual.md)
 - **Web Interface**: Access device IP after WiFi configuration
 - **Troubleshooting**: Common issues and solutions included in user manual
 
